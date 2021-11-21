@@ -1,0 +1,355 @@
+---
+title: "Practica Data Mining - Jose C Valenzuela"
+output: html_notebook
+---
+
+Load dataset:
+```{r}
+airbnb = read.csv("dataAirbnb/airbnb-listings.csv", sep = ';')
+options(repr.plot.height=4,repr.plot.width=6,repr.plot.res = 300)
+```
+
+Let's see the head of the airbnb
+
+```{r}
+head(airbnb)
+```
+
+We choose the most interesting columns:
+```{r}
+principalColumns = c('City','Room.Type','Neighbourhood','Accommodates','Bathrooms','Bedrooms','Beds','Price','Square.Feet','Guests.Included','Extra.People','Review.Scores.Rating','Latitude', 'Longitude')
+
+airbnb = airbnb[,principalColumns]
+names(airbnb)
+```
+
+
+We will work with Madrid and Room.Type=="Entire home/apt" with no empty Neighbourdhood.This is saved in a new dataset called df_madrid
+```{r}
+library("dplyr")
+```
+
+
+```{r}
+df_madrid = filter(airbnb, City == "Madrid" & Room.Type=="Entire home/apt" & Neighbourhood != "")
+df_madrid = select(df_madrid, -Room.Type, -City)
+head(df_madrid, 50)
+```
+
+
+
+Create a new column "Square.Meters" from "Square.Feet"
+```{r}
+PieToMet = 0.092903
+df_madrid$Square.Meters = PieToMet * df_madrid$Square.Feet
+head(df_madrid, 100)
+```
+
+
+What percentage of teh apartments does not show the squeare meters? I mean, how mane NAs on Square.Meters?
+```{r}
+percentageNA = mean(is.na(df_madrid$Square.Meters))
+```
+
+```{r}
+paste("The percentage of NA square Meters is:", percentageNA)
+```
+
+
+Of all the apartments that have a square meter value other than NA, what percentage of the apartments have 0 square meters?
+
+```{r}
+ZeroMeters = sum(df_madrid$Square.Meters== 0, na.rm = TRUE)
+percentageZero = ZeroMeters/((1-percentageNA)*nrow(df_madrid))
+```
+
+```{r}
+paste("The percentage of Zeros square Meters is:", percentageZero)
+```
+
+
+Replace all 0m ^ 2 by NA
+```{r}
+df_madrid$Square.Meters[df_madrid$Square.Meters==0] = NA
+```
+
+
+
+There are many, we are going to try to create a model that predicts how many square meters are based on the rest of the variables to try to fill in those NAs. But, before creating the model, we are going to do:
+* Paint the histogram of the square meters and see if we have to filter any more elements.
+* We will create a new synthetic variable based on the similarity between neighborhoods that we will use in our model.
+
+Paint the histogram and see if we have to filter any more elements.
+```{r}
+
+hist(na.omit(df_madrid$Square.Meters), main = "Histogram of cleaned Square Meters", xlab = "Square Meters", breaks=50)
+```
+
+
+It can be seen that there are some records of apartments with very few square meters. Assign the NA value to the Square.Meters column of the apartments that are less than 20 m ^ 2.
+```{r}
+df_madrid$Square.Meters[which(df_madrid$Square.Meters<20)]=NA
+```
+
+
+
+There are several Neighborhoods that all their Square.Meters entries are NA, we are going to remove from the dataset all the flats that belong to these neighborhoods.
+
+```{r}
+df_madrid_barrios = df_madrid %>% group_by(Neighbourhood) %>%
+  summarise(num_na=(sum(is.na((Square.Meters)))), num_total = n())
+```
+
+
+```{r}
+df_madrid_barrios
+```
+
+
+```{r}
+barriosVacios = c()
+for (i in 1:nrow(df_madrid_barrios)) {
+  if (df_madrid_barrios[i, "num_na"]==df_madrid_barrios[i,"num_total"])
+  barriosVacios = c(barriosVacios,df_madrid_barrios$Neighbourhood[i])
+  
+}
+
+barriosVacios
+```
+
+```{r}
+`%notin%` = Negate(`%in%`)
+```
+
+
+```{r}
+df_madrid = df_madrid[df_madrid$Neighbourhood %notin% barriosVacios, ]
+```
+
+
+The neighborhood appears to be an important indicator of the square footage of an apartment. We are going to group the neighborhoods by square meters. We can use a Tukey similarity matrix.
+
+
+```{r}
+tky<-TukeyHSD(aov( formula=Square.Meters~Neighbourhood, data=df_madrid ))
+tky.result<-data.frame(tky$Neighbourhood)
+cn <-sort(unique(df_madrid$Neighbourhood))
+resm <- matrix(NA, length(cn),length(cn))
+rownames(resm) <- cn
+colnames(resm) <- cn
+resm[lower.tri(resm) ] <- round(tky.result$p.adj,4)
+resm[upper.tri(resm) ] <- t(resm)[upper.tri(resm)] 
+diag(resm) <- 1
+library(ggplot2)
+library(reshape2)
+dfResm <- melt(resm)
+ggplot(dfResm, aes(x=Var1, y=Var2, fill=value))+
+  geom_tile(colour = "black")+
+  scale_fill_gradient(low = "white",high = "pink")+
+  ylab("Class")+xlab("Class")+theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),legend.position="none")
+```
+
+Using as distance variable: 1-resm, Let's draw a dendrogram of the different neighborhoods.
+
+
+```{r}
+neig.distance = as.dist(1-resm)
+```
+
+```{r}
+neig.tree = hclust(neig.distance, method = "complete")
+neig.dend = as.dendrogram(neig.tree)
+```
+
+
+```{r}
+library(dendextend)
+
+clusters = cutree_1h.dendrogram(neig.dend, h=0.4)
+plot(color_branches(neig.dend, h=0.4))
+```
+
+
+What cut-off point would be advisable? How many clusters appear?
+
+**It can be seen that Jerónimos and Ríos Rosas present a clear difference with regard to the others. In addition, we have three sufficiently differentiated clusters. We can set the cut-off point at 0.3. This will make Sol belong to the same cluster as those of the purple branch.**
+
+We are going to create a new column in the df_madrid dataframe with a new identifier marked by the clusters obtained. We will call this column neighb_id
+
+```{r}
+df_cluster = as.data.frame(clusters)
+names(df_cluster)="neighb_id"
+df_cluster$Neighbourhood=row.names(df_cluster)
+df_cluster
+```
+
+
+```{r}
+df_madrid = merge(df_madrid, df_cluster, by = "Neighbourhood")
+```
+
+We try to predict the square footage based on the rest of the columns in the dataframe. We are going to create two groups, one test and another train.
+
+```{r}
+#dataframe without NA in Square.Meters to make sure that our group test is correct.
+df_madrid_NONASM = df_madrid[!is.na(df_madrid$Square.Meters),]
+df_madrid_NONASM
+```
+
+
+
+```{r}
+idx<-sample(1:nrow(df_madrid_NONASM),nrow(df_madrid_NONASM)*0.7)
+df_madrid_NONASM.train<-df_madrid_NONASM[idx,]
+df_madrid_NONASM.test <-df_madrid_NONASM[-idx,]
+```
+
+
+
+```{r}
+summary(df_madrid_NONASM.train)
+summary(df_madrid_NONASM.test)
+```
+
+
+
+```{r}
+model_df_madrid_NONASM<-lm(Square.Meters~Guests.Included + Bedrooms + Bathrooms + neighb_id + Price,data=df_madrid_NONASM.train)
+summary(model_df_madrid_NONASM)
+```
+
+
+
+```{r}
+model_df_madrid_NONASM<-lm(Square.Meters~Guests.Included*Bedrooms*Bathrooms*neighb_id*Price,data=df_madrid_NONASM.train)
+summary(model_df_madrid_NONASM)
+```
+
+
+**It looks like the best model we could make is:**
+```{r}
+model_df_madrid_NONASM<-lm(Square.Meters~Guests.Included*Bedrooms*Bathrooms*neighb_id*Price,data=df_madrid_NONASM.train)
+```
+
+***Now, we can predict in test group:*
+
+
+```{r}
+df_madrid_NONASM.test$Square.Meters_est<-predict(model_df_madrid_NONASM,df_madrid_NONASM.test)
+df_madrid_NONASM.test
+```
+
+
+
+Let's make a histogram of the residuals on the test set to evaluate the quality of your model
+```{r}
+hist(sqrt((df_madrid_NONASM.test$Square.Meters-df_madrid_NONASM.test$Square.Meters_est)^2), 20)
+hist(log10(sqrt((df_madrid_NONASM.test$Square.Meters-df_madrid_NONASM.test$Square.Meters_est)^2)), 20)
+```
+
+**Histograms show that most of the predicted results are close to the actual result. However, it seems that a few data are far from the real.**
+
+Practice asks us for the following: If we had an ad for an apartment for 6 people (Accommodates), with 1 bathroom, with a price of € 80 / night and 3 rooms in the Sol neighborhood, with 3 beds and a review of 80 How many square meters would it have? If your model needs some additional variable you can invent it within the range of values of the dataset. How does your square meters vary with each additional room?
+
+**However, in our model we have not considered Accommodates or review and we do consider Guests.Included. Therefore, we will suppose 1 guests included in our model**
+
+
+```{r}
+q1= data.frame(
+  "Guests.Included" = 1,
+  "Bedrooms" = 3,
+  "Bathrooms" = 1,
+  "neighb_id" = 1,
+  "Price" = 80
+)
+
+answer1 = predict(model_df_madrid_NONASM, q1)
+answer1
+```
+
+```{r}
+summary(model_df_madrid_NONASM)
+```
+
+
+**It seems that our model does not work correctly when we deviate from 3 rooms since the square meters are skyrocketing.**
+
+Fill in the Square.Meters with NA value with the estimate with the previous model.
+
+```{r}
+df_madrid2 = df_madrid[,c("Guests.Included","Bedrooms", "Bathrooms","neighb_id","Price", "Square.Meters")]
+```
+
+```{r}
+head(names(df_madrid2),-1)
+```
+
+
+
+```{r}
+df_madrid[is.na(df_madrid$Square.Meters), "Square.Meters"] = predict(model_df_madrid_NONASM,df_madrid[is.na(df_madrid$Square.Meters), c("Guests.Included","Bedrooms", "Bathrooms","neighb_id","Price")])
+```
+
+
+```{r}
+df_madrid
+```
+
+
+
+
+Use PCA to find the closest apartment to a given one.
+
+```{r}
+columData = c("Accommodates", "Bathrooms", "Bedrooms", "Beds", "Price", "Guests.Included",
+              "Extra.People", "Review.Scores.Rating", "Latitude", "Longitude", "Square.Meters")
+df_madrid_PCA = na.omit(df_madrid[,columData])
+df_madrid_PCA
+```
+
+
+```{r}
+matrixPCA = data.matrix(df_madrid_PCA)
+
+pr_apart = prcomp(matrixPCA, center = TRUE, scale. = TRUE)
+```
+
+```{r}
+similar5 <- function( a, b, c, d, f, g, h,l, m, n, p, pr) {
+  df1 = data.frame(
+    "Accommodates" = a,
+    "Bathrooms" = b,
+    "Bedrooms" = c,
+    "Beds" = d,
+    "Price" = f,
+    "Guests.Included" = g,
+    "Extra.People" = h,
+    "Review.Scores.Rating" = l,
+    "Latitude" =m,
+    "Longitude" =n,
+    "Square.Meters" =p
+  )
+  df_apartamento_pca = predict(pr, df1)
+  
+  d = dist(rbind(df_apartamento_pca, df_pca$x), method="euclidean")
+  
+  
+  return(d)
+}
+
+```
+
+```{r}
+apartament_example = similar5(2, 1, 2, 4, 97, 4, 3, 85, 40.40452, 176.53494, 75, pr_apart)
+```
+
+
+
+
+
+
+
+
+
+
