@@ -316,35 +316,39 @@ pr_apart = prcomp(matrixPCA, center = TRUE, scale. = TRUE)
 ```
 
 ```{r}
-similar5 <- function( a, b, c, d, f, g, h,l, m, n, p, pr) {
-  df1 = data.frame(
-    "Accommodates" = a,
-    "Bathrooms" = b,
-    "Bedrooms" = c,
-    "Beds" = d,
-    "Price" = f,
-    "Guests.Included" = g,
-    "Extra.People" = h,
-    "Review.Scores.Rating" = l,
-    "Latitude" =m,
-    "Longitude" =n,
-    "Square.Meters" =p
+df1 = data.frame(
+    "Accommodates" = 2,
+    "Bathrooms" = 1,
+    "Bedrooms" = 2,
+    "Beds" = 4,
+    "Price" = 97,
+    "Guests.Included" = 4,
+    "Extra.People" = 3,
+    "Review.Scores.Rating" = 85,
+    "Latitude" =40.40452,
+    "Longitude" =176.53494,
+    "Square.Meters" =75
   )
-  df_apartamento_pca = predict(pr, df1)
-  
-  d = dist(rbind(df_apartamento_pca, df_pca$x), method="euclidean")
-  
-  
-  return(d)
-}
+df1
 
 ```
+
 
 ```{r}
-apartament_example = similar5(2, 1, 2, 4, 97, 4, 3, 85, 40.40452, 176.53494, 75, pr_apart)
+
+df_apartamento_pca = predict(pr_apart, df1)
+
+  
+d = dist(rbind(df_apartamento_pca, pr_apart$x), method="euclidean")
+
+rownames(matrixPCA[which.min(d),])
+# = head(d, 5)
+
+
+
 ```
 
-
+#Este último ejercicio no he podido realizarlo. He intentado calcular las distancias, ordenarlas en orden creciente y quedarme con las 5 primeras. Sin embargo, no lo conseguí. Luego intenté calcular la más cercana y con ese valor ver a qué apartamento correspondía pero el valor que obtengo se encuentra fuera de mi matrizPCA.
 
 
 
